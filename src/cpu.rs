@@ -1,7 +1,8 @@
+
+#[derive(Debug, PartialEq)]
 pub struct Reg(u8);
 
-// TODO: Reconsider some of these names.
-// TODO: Do we really need an intermediary type?
+#[derive(Debug, PartialEq)]
 pub enum Op {
     Cls,
     Ret,
@@ -43,12 +44,17 @@ pub enum Op {
 
 impl Op {
     pub fn decode(code: u16) -> Self {
+        let nib3 = ((code & 0xf000) >> 12) as u8;
+        let nib2 = ((code & 0xf00) >> 8) as u8;
+        let nib1 = ((code & 0xf0) >> 4) as u8;
+        let nib0 = (code & 0xf) as u8;
+
         let nnn = code & 0xfff;
-        let x = Reg(((code & 0x0f00) >> 8) as u8);
-        let y = Reg(((code & 0x00f0) >> 4) as u8);
+        let x = Reg(nib2);
+        let y = Reg(nib1);
         let kk = (code & 0xff) as u8;
 
-        match (code & 0xf00 >> 12, code & 0xf00 >> 8, code & 0xf0 >> 4, code & 0xf) {
+        match (nib3, nib2, nib1, nib0) {
             (0, 0, 0xe, 0) => Op::Cls,
             (0, 0, 0xe, 0xe) => Op::Ret,
             (0, _, _, _) => Op::Sys(nnn),
@@ -72,7 +78,7 @@ impl Op {
             (0xa, _, _, _) => Op::Ldi(nnn),
             (0xb, _, _, _) => Op::Jmpi(nnn),
             (0xc, _, _, _) => Op::Rand(x, kk),
-            (0xd, _, _, m) => Op::Draw(x, y, m as u8),
+            (0xd, _, _, m) => Op::Draw(x, y, m),
             (0xe, _, 9, 0xe) => Op::Skp(x),
             (0xe, _, 0xa, 1) => Op::Sknp(x),
             (0xf, _, 0, 7) => Op::Movd(x),
@@ -86,5 +92,49 @@ impl Op {
             (0xf, _, 6, 5) => Op::Read(x),
             _ => Op::Undef,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn op_decode() {
+        assert_eq!(Op::decode(0x00e0), Op::Cls);
+        assert_eq!(Op::decode(0x00ee), Op::Ret);
+        assert_eq!(Op::decode(0x0123), Op::Sys(0x123));
+        assert_eq!(Op::decode(0x1456), Op::Jmp(0x456));
+        assert_eq!(Op::decode(0x2789), Op::Call(0x789));
+        assert_eq!(Op::decode(0x3abc), Op::Se(Reg(0xa), 0xbc));
+        assert_eq!(Op::decode(0x4ef0), Op::Sne(Reg(0xe), 0xf0));
+        assert_eq!(Op::decode(0x5010), Op::Sre(Reg(0), Reg(1)));
+        assert_eq!(Op::decode(0x6234), Op::Ld(Reg(2), 0x34));
+        assert_eq!(Op::decode(0x7567), Op::Add(Reg(5), 0x67));
+        assert_eq!(Op::decode(0x8890), Op::Mov(Reg(8), Reg(9)));
+        assert_eq!(Op::decode(0x8ab1), Op::Or(Reg(0xa), Reg(0xb)));
+        assert_eq!(Op::decode(0x8cd2), Op::And(Reg(0xc), Reg(0xd)));
+        assert_eq!(Op::decode(0x8ef3), Op::Xor(Reg(0xe), Reg(0xf)));
+        assert_eq!(Op::decode(0x8014), Op::Addr(Reg(0), Reg(1)));
+        assert_eq!(Op::decode(0x8235), Op::Subr(Reg(2), Reg(3)));
+        assert_eq!(Op::decode(0x8456), Op::Shr(Reg(5), Reg(4)));
+        assert_eq!(Op::decode(0x8677), Op::Subnr(Reg(6), Reg(7)));
+        assert_eq!(Op::decode(0x889e), Op::Shl(Reg(9), Reg(8)));
+        assert_eq!(Op::decode(0x9ab0), Op::Srne(Reg(0xa), Reg(0xb)));
+        assert_eq!(Op::decode(0xacde), Op::Ldi(0xcde));
+        assert_eq!(Op::decode(0xbef0), Op::Jmpi(0xef0));
+        assert_eq!(Op::decode(0xc123), Op::Rand(Reg(1), 0x23));
+        assert_eq!(Op::decode(0xd456), Op::Draw(Reg(4), Reg(5), 6));
+        assert_eq!(Op::decode(0xe79e), Op::Skp(Reg(7)));
+        assert_eq!(Op::decode(0xe8a1), Op::Sknp(Reg(8)));
+        assert_eq!(Op::decode(0xf907), Op::Movd(Reg(9)));
+        assert_eq!(Op::decode(0xfa0a), Op::Key(Reg(0xa)));
+        assert_eq!(Op::decode(0xfb15), Op::Ldd(Reg(0xb)));
+        assert_eq!(Op::decode(0xfc18), Op::Lds(Reg(0xc)));
+        assert_eq!(Op::decode(0xfd1e), Op::Addi(Reg(0xd)));
+        assert_eq!(Op::decode(0xfe29), Op::Ldspr(Reg(0xe)));
+        assert_eq!(Op::decode(0xff33), Op::Bcd(Reg(0xf)));
+        assert_eq!(Op::decode(0xf055), Op::Str(Reg(0)));
+        assert_eq!(Op::decode(0xf165), Op::Read(Reg(1)));
     }
 }
