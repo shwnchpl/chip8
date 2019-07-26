@@ -10,7 +10,7 @@ extern crate rand;
 use std::error;
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -39,23 +39,102 @@ impl fmt::Display for Error {
 
 type SoundDriver = Arc<Mutex<Option<Box<dyn driver::Sound>>>>;
 
+struct Timer {
+    thread: Option<thread::JoinHandle<()>>,
+    dt: Arc<AtomicU8>,
+    st: Arc<AtomicU8>,
+    halt: Arc<AtomicBool>,
+    sound_driver: SoundDriver,
+}
+
 pub struct Cpu {
     pc: u16,
     sp: u8,
     i: u16,
-    dt: Arc<AtomicU8>,
-    st: Arc<AtomicU8>,
     v: [u8; Self::REG_COUNT],
     ram: [u8; Self::RAM_BYTES],
     vram: [bool; Self::VRAM_BYTES],
     stack: [u16; Self::MAX_STACK_DEPTH],
     display_driver: Option<Box<dyn driver::Display>>,
-    sound_driver: SoundDriver,
     input_driver: Option<Box<dyn driver::Input>>,
-    timer_thread: thread::JoinHandle<()>,
+    timer: Timer,
 }
 
 type Result<T> = std::result::Result<T, Error>;
+
+impl Timer {
+    fn new() -> Self {
+        let dt = Arc::new(AtomicU8::new(0x00));
+        let st = Arc::new(AtomicU8::new(0x00));
+        let halt = Arc::new(AtomicBool::new(false));
+        let sound_driver: SoundDriver = Arc::new(Mutex::new(None));
+
+        let dt_clone = Arc::clone(&dt);
+        let st_clone = Arc::clone(&st);
+        let halt_clone = Arc::clone(&halt);
+        let sound_driver_clone = Arc::clone(&sound_driver);
+
+        let thread = thread::spawn(move || {
+            let mut st_was_pos = false;
+
+            loop {
+                if halt_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+
+                let v = dt_clone.load(Ordering::Relaxed);
+                if v > 0 {
+                    /* Only decrement if the value didn't just change out from
+                       under us. If it did, we'll catch up next cycle. Same
+                       goes for the sound timer below. */
+                    dt_clone.compare_and_swap(v, v - 1, Ordering::Relaxed);
+                }
+
+                let mut v = st_clone.load(Ordering::Relaxed);
+                if v > 0 {
+                    v = st_clone.compare_and_swap(v, v - 1, Ordering::Relaxed);
+                }
+
+                if v <= 1 && st_was_pos {
+                    let mut lock = sound_driver_clone.try_lock();
+                    if let Ok(ref mut mutex) = lock {
+                        if let Some(sound_driver) = &mut **mutex {
+                            sound_driver.stop_buzz();
+                        }
+                        st_was_pos = false;
+                    }
+                } else if  v > 1 && !st_was_pos {
+                    let mut lock = sound_driver_clone.try_lock();
+                    if let Ok(ref mut mutex) = lock {
+                        if let Some(sound_driver) = &mut **mutex {
+                            sound_driver.start_buzz();
+                        }
+                        st_was_pos = true;
+                    }
+                }
+
+                thread::sleep(Duration::from_millis(16)); // Decent estimation of 60hz
+            }
+        });
+
+        Timer {
+            thread: Some(thread),
+            dt,
+            st,
+            sound_driver,
+            halt
+        }
+    }
+}
+
+impl Drop for Timer {
+    fn drop(&mut self) {
+        self.halt.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
 
 impl Cpu {
     pub const LOAD_OFFSET: usize = 0x200;
@@ -97,54 +176,8 @@ impl Cpu {
     ];
 
     pub fn new() -> Self {
-        let dt = Arc::new(AtomicU8::new(0x00));
-        let st = Arc::new(AtomicU8::new(0x00));
-        let sound_driver: SoundDriver = Arc::new(Mutex::new(None));
-
-        let dt_clone = Arc::clone(&dt);
-        let st_clone = Arc::clone(&st);
-        let sound_driver_clone = Arc::clone(&sound_driver);
-
-        let timer_thread = thread::spawn(move || {
-            let mut st_was_pos = false;
-
-            loop {
-                let v = dt_clone.load(Ordering::Relaxed);
-                if v > 0 {
-                    /* Only decrement if the value didn't just change out from
-                       under us. If it did, we'll catch up next cycle. Same
-                       goes for the sound timer below. */
-                    dt_clone.compare_and_swap(v, v - 1, Ordering::Relaxed);
-                }
-
-                let mut v = st_clone.load(Ordering::Relaxed);
-                if v > 0 {
-                    v = st_clone.compare_and_swap(v, v - 1, Ordering::Relaxed);
-                }
-
-                if v <= 1 && st_was_pos {
-                    let mut lock = sound_driver_clone.try_lock();
-                    if let Ok(ref mut mutex) = lock {
-                        if let Some(sound_driver) = &mut **mutex {
-                            sound_driver.stop_buzz();
-                        }
-                        st_was_pos = false;
-                    }
-                } else if  v > 1 && !st_was_pos {
-                    let mut lock = sound_driver_clone.try_lock();
-                    if let Ok(ref mut mutex) = lock {
-                        if let Some(sound_driver) = &mut **mutex {
-                            sound_driver.start_buzz();
-                        }
-                        st_was_pos = true;
-                    }
-                }
-
-                thread::sleep(Duration::from_millis(16)); // Decent estimation of 60hz
-            }
-        });
-
         let mut ram = [0xff; Self::RAM_BYTES];
+
         ram[Self::FONT_SPRITES_RAM_START..Self::FONT_SPRITES_RAM_END]
             .copy_from_slice(&Self::FONT_SPRITES);
 
@@ -152,16 +185,13 @@ impl Cpu {
             pc: 0x0000,
             sp: 0x00,
             i: 0x0000,
-            dt: dt,
-            st: st,
             v: [0x00; Self::REG_COUNT],
             ram: ram,
             vram: [false; Self::VRAM_BYTES],
             stack: [0x0000; Self::MAX_STACK_DEPTH],
             display_driver: None,
-            sound_driver: sound_driver,
             input_driver: None,
-            timer_thread: timer_thread,
+            timer: Timer::new(),
         }
     }
 
@@ -180,7 +210,7 @@ impl Cpu {
     }
 
     pub fn set_sound_driver(&mut self, driver: Option<Box<dyn driver::Sound>>) {
-        let d = Arc::clone(&self.sound_driver);
+        let d = Arc::clone(&self.timer.sound_driver);
         let mut d = d.lock().unwrap();
         *d = driver;
     }
@@ -387,7 +417,7 @@ impl Cpu {
                 }
             },
             Op::Movd(Reg(x @ 0..=Self::MAX_REG)) => {
-                self.v[x] = self.dt.load(Ordering::Relaxed);
+                self.v[x] = self.timer.dt.load(Ordering::Relaxed);
                 Ok(())
             },
             Op::Key(Reg(x @ 0..=Self::MAX_REG)) => {
@@ -399,11 +429,11 @@ impl Cpu {
                 }
             },
             Op::Ldd(Reg(x @ 0..=Self::MAX_REG)) => {
-                self.dt.store(self.v[x], Ordering::Relaxed);
+                self.timer.dt.store(self.v[x], Ordering::Relaxed);
                 Ok(())
             },
             Op::Lds(Reg(x @ 0..=Self::MAX_REG)) => {
-                self.st.store(self.v[x], Ordering::Relaxed);
+                self.timer.st.store(self.v[x], Ordering::Relaxed);
                 Ok(())
             },
             Op::Addi(Reg(x @ 0..=Self::MAX_REG)) => {
@@ -600,21 +630,21 @@ mod tests {
     fn atomic() {
         let mut cpu = Cpu::new();
 
-        cpu.exec(Op::Ld(Reg(0), 200));
-        cpu.exec(Op::Ldd(Reg(0)));
-        cpu.exec(Op::Movd(Reg(0)));
+        cpu.exec(Op::Ld(Reg(0), 200)).unwrap();
+        cpu.exec(Op::Ldd(Reg(0))).unwrap();
+        cpu.exec(Op::Movd(Reg(0))).unwrap();
 
         assert_eq!(cpu.v[0], 200);
         thread::sleep(Duration::from_millis(500));
 
-        cpu.exec(Op::Movd(Reg(0)));
+        cpu.exec(Op::Movd(Reg(0))).unwrap();
         assert!(cpu.v[0] < 175 && cpu.v[0] > 165);
 
-        cpu.exec(Op::Ld(Reg(0), 200));
-        cpu.exec(Op::Lds(Reg(0)));
+        cpu.exec(Op::Ld(Reg(0), 200)).unwrap();
+        cpu.exec(Op::Lds(Reg(0))).unwrap();
         thread::sleep(Duration::from_millis(250));
 
-        let ds = cpu.st.load(Ordering::Relaxed);
+        let ds = cpu.timer.st.load(Ordering::Relaxed);
         assert!(ds < 187 && ds > 183);
     }
 
@@ -622,10 +652,10 @@ mod tests {
     fn bcd() {
         let mut cpu = Cpu::new();
 
-        cpu.exec(Op::Ld(Reg(0), 135));
-        cpu.exec(Op::Ldi(0x400));
-        cpu.exec(Op::Bcd(Reg(0)));
-        cpu.exec(Op::Read(Reg(2)));
+        cpu.exec(Op::Ld(Reg(0), 135)).unwrap();
+        cpu.exec(Op::Ldi(0x400)).unwrap();
+        cpu.exec(Op::Bcd(Reg(0))).unwrap();
+        cpu.exec(Op::Read(Reg(2))).unwrap();
 
         assert_eq!(cpu.v[0], 1);
         assert_eq!(cpu.v[1], 3);
@@ -642,14 +672,14 @@ mod tests {
             0b11111111,
         ];
 
-        cpu.exec(Op::Ld(Reg(0), sprite[0]));
-        cpu.exec(Op::Ld(Reg(1), sprite[1]));
-        cpu.exec(Op::Ld(Reg(2), sprite[2]));
-        cpu.exec(Op::Ldi(0x400));
-        cpu.exec(Op::Str(Reg(2)));
-        cpu.exec(Op::Ld(Reg(3), 0x15));
-        cpu.exec(Op::Ld(Reg(4), 0x05));
-        cpu.exec(Op::Draw(Reg(3), Reg(4), 3));
+        cpu.exec(Op::Ld(Reg(0), sprite[0])).unwrap();
+        cpu.exec(Op::Ld(Reg(1), sprite[1])).unwrap();
+        cpu.exec(Op::Ld(Reg(2), sprite[2])).unwrap();
+        cpu.exec(Op::Ldi(0x400)).unwrap();
+        cpu.exec(Op::Str(Reg(2))).unwrap();
+        cpu.exec(Op::Ld(Reg(3), 0x15)).unwrap();
+        cpu.exec(Op::Ld(Reg(4), 0x05)).unwrap();
+        assert_eq!(cpu.exec(Op::Draw(Reg(3), Reg(4), 3)), Err(Error::DriverMissing));
 
         let row1_start = 0x05 * Cpu::DISPLAY_WIDTH + 0x15;
         let row1_end = 0x05 * Cpu::DISPLAY_WIDTH + 0x1d;
@@ -664,16 +694,16 @@ mod tests {
         assert_eq!(cpu.v[Cpu::FLAG_REG], 0x00);
 
         /* Draw the same sprite again to clear it. */
-        cpu.exec(Op::Draw(Reg(3), Reg(4), 3));
+        assert_eq!(cpu.exec(Op::Draw(Reg(3), Reg(4), 3)), Err(Error::DriverMissing));
 
         assert_eq!(cpu.vram[row1_start..row1_end], [false, false, false, false, false, false, false, false]);
         assert_eq!(cpu.vram[row2_start..row2_end], [false, false, false, false, false, false, false, false]);
         assert_eq!(cpu.vram[row3_start..row3_end], [false, false, false, false, false, false, false, false]);
         assert_eq!(cpu.v[Cpu::FLAG_REG], 0x01);
 
-        cpu.exec(Op::Ld(Reg(3), 60));
-        cpu.exec(Op::Ld(Reg(4), 30));
-        cpu.exec(Op::Draw(Reg(3), Reg(4), 3));
+        cpu.exec(Op::Ld(Reg(3), 60)).unwrap();
+        cpu.exec(Op::Ld(Reg(4), 30)).unwrap();
+        assert_eq!(cpu.exec(Op::Draw(Reg(3), Reg(4), 3)), Err(Error::DriverMissing));
 
         let row1_unwrapped_start = 30 * Cpu::DISPLAY_WIDTH + 60;
         let row1_unwrapped_end = 30 * Cpu::DISPLAY_WIDTH + 64;
