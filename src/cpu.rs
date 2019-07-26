@@ -1,9 +1,7 @@
 
 // TODO: Add Cpu struct method tests.
 // TODO: Add documentation.
-// TODO: Verify that the Orderings used for atomic operations are correct.
 // TODO: Verify that mutability for sound driver will actually work.
-// TODO: Implement drop and thread join.
 
 extern crate rand;
 
@@ -199,7 +197,8 @@ impl Cpu {
         if data.len() > self.ram.len() - Self::LOAD_OFFSET {
             Err(Error::LoadFailure)
         } else {
-            self.ram[Self::LOAD_OFFSET..data.len()].copy_from_slice(data);
+            let load_end = Self::LOAD_OFFSET + data.len();
+            self.ram[Self::LOAD_OFFSET..load_end].copy_from_slice(data);
             self.pc = Self::LOAD_OFFSET as u16;
             Ok(())
         }
@@ -219,7 +218,7 @@ impl Cpu {
         self.input_driver = driver;
     }
 
-    // TODO: Add a function to tick appropriately to some clock speed.
+    // TODO: Add a function to tick appropriately to some clock speed?
     pub fn tick(&mut self) -> Result<()> {
         let opcode = self.fetch()?;
         let op = Op::decode(opcode)?;
@@ -725,5 +724,37 @@ mod tests {
         assert_eq!(cpu.vram[row2_wrapped_start..row2_wrapped_end], [false, false, false, true]);
         assert_eq!(cpu.vram[row3_wrapped_start..row3_wrapped_end], [true, true, true, true]);
         assert_eq!(cpu.v[Cpu::FLAG_REG], 0x00);
+    }
+
+    #[test]
+    fn load_and_tick() {
+        let program: [u8; 6] = [
+            0x60,
+            0x12, /* ld r0, 0x12 */
+            0x61,
+            0x02, /* ld r1, 0x02 */
+            0x80,
+            0x14, /* addr r0, r1 */
+        ];
+
+        let mut cpu = Cpu::new();
+        let lo = Cpu::LOAD_OFFSET as u16;
+        cpu.load(&program).unwrap();
+        assert_eq!(cpu.pc, lo);
+
+        cpu.tick().unwrap();
+        assert_eq!(cpu.pc, lo + 2);
+        assert_eq!(cpu.v[0], 0x12);
+
+        cpu.tick().unwrap();
+        assert_eq!(cpu.pc, lo + 4);
+        assert_eq!(cpu.v[1], 0x02);
+
+        cpu.tick().unwrap();
+        assert_eq!(cpu.pc, lo + 6);
+        assert_eq!(cpu.v[0], 0x14);
+
+        assert_eq!(cpu.tick(), Err(Error::BadInstruction));
+        assert_eq!(cpu.pc, lo + 6);
     }
 }
