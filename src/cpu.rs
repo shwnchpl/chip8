@@ -3,7 +3,7 @@
 // TODO: Add documentation.
 // TODO: Verify that mutability for sound driver will actually work.
 
-extern crate rand;
+extern crate rand; // TODO: Is this needed?
 
 use std::error;
 use std::fmt;
@@ -276,19 +276,19 @@ impl Cpu {
             },
             Op::Se(Reg(x @ 0..=Self::MAX_REG), kk) => {
                 if self.v[x] == kk {
-                    self.sp += 2;
+                    self.pc += 2;
                 }
                 Ok(())
             },
             Op::Sne(Reg(x @ 0..=Self::MAX_REG), kk) => {
                 if self.v[x] != kk {
-                    self.sp += 2;
+                    self.pc += 2;
                 }
                 Ok(())
             },
             Op::Sre(Reg(x @ 0..=Self::MAX_REG), Reg(y @ 0..=Self::MAX_REG)) => {
                 if self.v[x] == self.v[y] {
-                    self.sp += 2;
+                    self.pc += 2;
                 }
                 Ok(())
             },
@@ -298,7 +298,8 @@ impl Cpu {
             },
             Op::Add(Reg(x @ 0..=Self::MAX_REG), kk) => {
                 /* per spec, carry flag intentionally not changed */
-                self.v[x] += kk;
+                let (val, _) = self.v[x].overflowing_add(kk);
+                self.v[x] = val;
                 Ok(())
             },
             Op::Mov(Reg(x @ 0..=Self::MAX_REG), Reg(y @ 0..=Self::MAX_REG)) => {
@@ -347,7 +348,7 @@ impl Cpu {
             },
             Op::Srne(Reg(x @ 0..=Self::MAX_REG), Reg(y @ 0..=Self::MAX_REG)) => {
                 if self.v[x] != self.v[y] {
-                    self.sp += 2;
+                    self.pc += 2;
                 }
                 Ok(())
             },
@@ -371,7 +372,7 @@ impl Cpu {
                         let spr_byte = self.ram[offset];
                         let v = (self.v[y] as usize + n as usize) % Self::DISPLAY_HEIGHT;
                         for h in 0..8 {
-                            let set = (spr_byte & (1 << h)) != 0;
+                            let set = (spr_byte & (1 << (7 - h))) != 0;
                             let h = (self.v[x] as usize + h) % Self::DISPLAY_WIDTH;
                             let vram_offset = v * Self::DISPLAY_WIDTH + h;
                             let will_clear = self.vram[vram_offset] && set;
@@ -395,8 +396,8 @@ impl Cpu {
             },
             Op::Skp(Reg(x @ 0..=Self::MAX_REG)) => {
                 if let Some(input_driver) = &self.input_driver {
-                    if input_driver.poll(x as u8) {
-                        self.sp += 2;
+                    if input_driver.poll(self.v[x] as u8) {
+                        self.pc += 2;
                     }
                     Ok(())
                 } else {
@@ -405,13 +406,13 @@ impl Cpu {
             },
             Op::Sknp(Reg(x @ 0..=Self::MAX_REG)) => {
                 if let Some(input_driver) = &self.input_driver {
-                    if !input_driver.poll(x as u8) {
-                        self.sp += 2;
+                    if !input_driver.poll(self.v[x] as u8) {
+                        self.pc += 2;
                     }
                     Ok(())
                 } else {
                     /* Assume that no input driver means no key press, ever. */
-                    self.sp += 2;
+                    self.pc += 2;
                     Err(Error::DriverMissing)
                 }
             },
@@ -442,7 +443,7 @@ impl Cpu {
             Op::Ldspr(Reg(x @ 0..=Self::MAX_REG)) => {
                 self.i = Self::FONT_SPRITES_RAM_START as u16 +
                          Self::FONT_SPRITE_BYTES_PER as u16 *
-                         x as u16;
+                         self.v[x] as u16;
                 Ok(())
             },
             Op::Bcd(Reg(x @ 0..=Self::MAX_REG)) => {
@@ -487,7 +488,7 @@ impl Cpu {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Reg(usize);
+pub struct Reg(pub usize);
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Op {

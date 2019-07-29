@@ -6,9 +6,9 @@ pub trait Display {
 }
 
 pub trait Sound: Send {
-    fn start_buzz(&mut self);
+    fn start_buzz(&self);
 
-    fn stop_buzz(&mut self);
+    fn stop_buzz(&self);
 }
 
 pub trait Input {
