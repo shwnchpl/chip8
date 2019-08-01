@@ -1,9 +1,7 @@
 
 // TODO: Add Cpu struct method tests.
 // TODO: Add documentation.
-// TODO: Verify that mutability for sound driver will actually work.
-
-extern crate rand; // TODO: Is this needed?
+// TODO: Move Ops into their own file.
 
 use std::error;
 use std::fmt;

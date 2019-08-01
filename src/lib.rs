@@ -1,2 +1,2 @@
-pub mod cpu;
-pub mod driver;
+pub mod core;
+pub mod sdl;
