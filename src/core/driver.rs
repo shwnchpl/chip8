@@ -1,6 +1,4 @@
 
-// TODO: Ensure that these are sufficient.
-
 pub trait Display {
     fn refresh(&mut self, vram: &[bool]);
 }

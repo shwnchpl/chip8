@@ -33,6 +33,17 @@ impl fmt::Display for Error {
     }
 }
 
+impl Error {
+    pub fn fatal(&self) -> bool {
+        match *self {
+            Error::DriverMissing => false,
+            Error::MalformedOp(_) => false,
+            Error::UnimplementedOp(_) => false,
+            _ => true,
+        }
+    }
+}
+
 type SoundDriver = Arc<Mutex<Option<Box<dyn driver::Sound>>>>;
 
 struct Timer {
@@ -216,7 +227,6 @@ impl Cpu {
         self.input_driver = driver;
     }
 
-    // TODO: Add a function to tick appropriately to some clock speed?
     pub fn tick(&mut self) -> Result<()> {
         let opcode = self.fetch()?;
         let op = Op::decode(opcode)?;

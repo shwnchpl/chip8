@@ -1,7 +1,7 @@
 use std::collections::HashSet;
+use std::sync::{Arc, Weak};
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
-use std::time;
 
 use sdl2::audio::AudioSpecDesired;
 use sdl2::event::Event;
@@ -10,9 +10,9 @@ use sdl2::render::WindowCanvas;
 
 use crate::core::cpu::Cpu;
 
+use super::driver::{InputDriver, SoundDriver, DisplayDriver};
 use super::io;
 use super::io::{Buzzer, SquareWave};
-use super::driver::{InputDriver, SoundDriver, DisplayDriver};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -67,11 +67,12 @@ impl Chip8UI for sdl2::Sdl {
 pub struct Controller {
     cido_tx: Sender<io::Command>,
     thread: Option<thread::JoinHandle<()>>,
+    alive: Weak<()>,
 }
 
 impl Drop for Controller {
     fn drop(&mut self) {
-        // TODO: Send the halt message?
+        let _ = self.cido_tx.send(io::Command::Quit);
         if let Some(thread) = self.thread.take() {
             thread.join().unwrap();
         }
@@ -83,11 +84,20 @@ impl Controller {
     const SCREEN_WIDTH: u32 = Cpu::DISPLAY_WIDTH as u32;
     const SCREEN_HEIGHT: u32 = Cpu::DISPLAY_HEIGHT as u32;
     const WINDOW_TITLE: &'static str = "CHIP-8 Emulator";
+    const DISP_REFRESH_DELAY: std::time::Duration = std::time::Duration::from_millis(2);
 
     pub fn new() -> Self {
         let (cido_tx, cido_rx) = channel::<io::Command>();
 
+        let alive = Arc::new(());
+        let control = Arc::downgrade(&alive);
+
         let thread = thread::spawn(move || {
+            // By moving alive into this thread, we ensure that the
+            // reference count will go to zero only when the thread
+            // exits or panics.
+            // See https://stackoverflow.com/a/39615208 for details.
+            let _alive = alive;
             let cido_rx = cido_rx;
 
             let sdl_context = sdl2::init().unwrap();
@@ -102,14 +112,12 @@ impl Controller {
             let mut event_pump = sdl_context.event_pump().unwrap();
             let mut codi_tx: Option<Sender<io::Key>> = None;
 
-            // canvas.set_draw_color(sdl2::pixels::Color::RGB(0, 0, 0));
             canvas.clear();
             canvas.present();
 
             let mut needs_key = false;
 
             'running: loop {
-                // TODO: Consider mpsc select?
                 let pressed_keys: HashSet<u8> = event_pump
                     .keyboard_state()
                     .pressed_scancodes()
@@ -183,16 +191,18 @@ impl Controller {
                         },
                         _ => ()
                     }
+
+                    canvas.present();
                 }
 
-                // TODO: Does this make sense?
-                thread::sleep(time::Duration::from_millis(2));
+                thread::sleep(Self::DISP_REFRESH_DELAY);
             }
         });
 
         Controller {
             cido_tx,
-            thread: Some(thread)
+            thread: Some(thread),
+            alive: control
         }
     }
 
@@ -215,5 +225,13 @@ impl Controller {
         Box::new(DisplayDriver {
             cido_tx: self.cido_tx.clone()
         })
+    }
+
+    pub fn alive(&self) -> bool {
+        if let Some(_) = self.alive.upgrade() {
+            true
+        } else {
+            false
+        }
     }
 }
