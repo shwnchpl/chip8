@@ -1,6 +1,4 @@
 
-// TODO: Add documentation.
-
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
