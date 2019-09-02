@@ -45,3 +45,8 @@ which should be compatible with this emulator.
 
 ### TETRIS
 ![Screenshot of the game TETRIS](/screenshots/tetris.png?raw=true "TETRIS")
+
+## License
+
+This project is licensed under the MIT License. See the
+[LICENSE.md](LICENSE.md) file for details.
