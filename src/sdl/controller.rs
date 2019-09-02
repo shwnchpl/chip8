@@ -44,7 +44,7 @@ impl Chip8UI for sdl2::Sdl {
     }
 
     fn chip8_buzzer(&self) -> Result<Buzzer> {
-        let audio_subsystem = self.audio().unwrap();
+        let audio_subsystem = self.audio()?;
 
         let desired_spec = AudioSpecDesired {
             freq: Some(44_100),
@@ -66,7 +66,7 @@ impl Chip8UI for sdl2::Sdl {
 // codi - controller out driver in
 pub struct Controller {
     cido_tx: Sender<io::Command>,
-    thread: Option<thread::JoinHandle<()>>,
+    thread: Option<thread::JoinHandle<Result<()>>>,
     alive: Weak<()>,
 }
 
@@ -74,7 +74,9 @@ impl Drop for Controller {
     fn drop(&mut self) {
         let _ = self.cido_tx.send(io::Command::Quit);
         if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
+            if let Err(e) = thread.join().unwrap() {
+                panic!("UI thread exited with error: {}", e);
+            }
         }
     }
 }
@@ -100,16 +102,15 @@ impl Controller {
             let _alive = alive;
             let cido_rx = cido_rx;
 
-            let sdl_context = sdl2::init().unwrap();
+            let sdl_context = sdl2::init()?;
 
             let mut canvas = sdl_context
                 .chip8_canvas(
                     Self::WINDOW_TITLE,
                     Self::SCREEN_WIDTH * Self::SQUARE_SIZE,
-                    Self::SCREEN_HEIGHT * Self::SQUARE_SIZE)
-                .unwrap();
-            let buzzer = sdl_context.chip8_buzzer().unwrap();
-            let mut event_pump = sdl_context.event_pump().unwrap();
+                    Self::SCREEN_HEIGHT * Self::SQUARE_SIZE)?;
+            let buzzer = sdl_context.chip8_buzzer()?;
+            let mut event_pump = sdl_context.event_pump()?;
             let mut codi_tx: Option<Sender<io::Key>> = None;
 
             canvas.clear();
@@ -160,7 +161,7 @@ impl Controller {
                                 sdl2::rect::Rect::new(
                                     x as i32, y as i32, Self::SQUARE_SIZE, Self::SQUARE_SIZE
                                 )
-                            );
+                            )?;
                         }
                         canvas.present();
                     },
@@ -179,7 +180,7 @@ impl Controller {
 
                 if needs_key && !pressed_keys.is_empty() {
                     if let Some(tx) = &codi_tx {
-                        tx.send(Some(*pressed_keys.iter().nth(0).unwrap()));
+                        let _ = tx.send(Some(*pressed_keys.iter().nth(0).unwrap()));
                     }
                     needs_key = false;
                 }
@@ -197,6 +198,8 @@ impl Controller {
 
                 thread::sleep(Self::DISP_REFRESH_DELAY);
             }
+
+            Ok(())
         });
 
         Controller {
@@ -214,7 +217,7 @@ impl Controller {
 
     pub fn get_input_driver(&self) -> Box<InputDriver> {
         let (codi_tx, codi_rx) = channel::<io::Key>();
-        self.cido_tx.send(io::Command::KeyChanSet(Some(codi_tx)));
+        let _ = self.cido_tx.send(io::Command::KeyChanSet(Some(codi_tx)));
         Box::new(InputDriver {
             codi_rx,
             cido_tx: self.cido_tx.clone(),

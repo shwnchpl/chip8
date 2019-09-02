@@ -30,8 +30,6 @@ impl Input for InputDriver {
 
     fn block(&self) -> u8 {
         self.cido_tx.send(io::Command::KeyBlock).unwrap();
-
-        // TODO: Is this default reasonable?
         self.codi_rx.recv().unwrap_or(Some(0)).unwrap()
     }
 }
@@ -45,6 +43,6 @@ impl Display for DisplayDriver {
         self.cido_tx.send(
             io::Command::DisplayRefresh(
                 vram.to_owned()
-        ));
+        )).unwrap();
     }
 }

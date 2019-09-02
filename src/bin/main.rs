@@ -10,12 +10,6 @@ use clap::{Arg, App};
 use chip8::core::cpu::Cpu;
 use chip8::sdl::controller::Controller as UIController;
 
-// TODO: Clean up unwraps.
-// TODO: Handle errors!
-// TODO: Fix all warnings!
-// TODO: Add option to specific clock speed as a command line arg.
-// TODO: Make sure drivers won't panic after display thread closes.
-
 fn main() -> io::Result<()> {
     let matches = App::new("Chip-8 Emulator")
         .version("0.1")
