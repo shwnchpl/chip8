@@ -62,6 +62,7 @@ impl Chip8UI for sdl2::Sdl {
             })
     }
 }
+
 // cido - controller in driver out
 // codi - controller out driver in
 pub struct Controller {
